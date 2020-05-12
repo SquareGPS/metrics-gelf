@@ -74,14 +74,14 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
-        <maven.compiler.source>1.7</maven.compiler.source>
-        <maven.compiler.target>1.7</maven.compiler.target>
+        <maven.compiler.source>1.8</maven.compiler.source>
+        <maven.compiler.target>1.8</maven.compiler.target>
         <maven.deploy.skip>true</maven.deploy.skip>
         <maven.site.deploy.skip>true</maven.site.deploy.skip>
         <gpg.keyname>B1606F22</gpg.keyname>
 
-        <metrics.version>3.1.2</metrics.version>
-        <gelfclient.version>1.4.1</gelfclient.version>
+        <metrics.version>4.0.5</metrics.version>
+        <gelfclient.version>1.5.0</gelfclient.version>
     </properties>
 
     <dependencies>

@@ -15,14 +15,7 @@
  */
 package org.graylog.metrics;
 
-import com.codahale.metrics.Clock;
-import com.codahale.metrics.Counter;
-import com.codahale.metrics.Gauge;
-import com.codahale.metrics.Histogram;
-import com.codahale.metrics.Meter;
-import com.codahale.metrics.MetricFilter;
-import com.codahale.metrics.MetricRegistry;
-import com.codahale.metrics.Timer;
+import com.codahale.metrics.*;
 import org.graylog2.gelfclient.GelfMessage;
 import org.graylog2.gelfclient.GelfMessageLevel;
 import org.graylog2.gelfclient.transport.GelfTransport;
@@ -38,12 +31,12 @@ import org.mockito.junit.MockitoRule;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static com.codahale.metrics.MetricRegistry.name;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.*;
 
 public class GelfReporterTest {
     @Rule
@@ -71,8 +64,10 @@ public class GelfReporterTest {
                 MetricFilter.ALL,
                 GelfMessageLevel.DEBUG,
                 "source",
-                Collections.<String, Object>singletonMap("test", "foobar")
+                Collections.<String, Object>singletonMap("test", "foobar"),
+                true
         );
+        when(transport.trySend(any(GelfMessage.class))).thenReturn(true);
     }
 
     @Test
@@ -81,17 +76,35 @@ public class GelfReporterTest {
         counter.inc(42);
         gelfReporter.report();
 
-        verify(transport, times(1)).trySend(gelfMessageCaptor.capture());
+        counter.inc(10);
+        gelfReporter.report();
 
-        final GelfMessage gelfMessage = gelfMessageCaptor.getValue();
-        assertThat(gelfMessage.getMessage()).isEqualTo("name=prefix.foo.bar type=COUNTER");
-        assertThat(gelfMessage.getLevel()).isEqualTo(GelfMessageLevel.DEBUG);
-        assertThat(gelfMessage.getHost()).isEqualTo("source");
-        assertThat(gelfMessage.getAdditionalFields())
-                .hasSize(4)
+        verify(transport, times(2)).trySend(gelfMessageCaptor.capture());
+
+
+        List<GelfMessage> allValues = gelfMessageCaptor.getAllValues();
+        final GelfMessage firstMsg = allValues.get(0);
+        assertThat(firstMsg.getMessage()).isEqualTo("name=prefix.foo.bar type=COUNTER");
+        assertThat(firstMsg.getLevel()).isEqualTo(GelfMessageLevel.DEBUG);
+        assertThat(firstMsg.getHost()).isEqualTo("source");
+        assertThat(firstMsg.getAdditionalFields())
+                .hasSize(5)
                 .containsEntry("name", "prefix.foo.bar")
                 .containsEntry("type", "COUNTER")
                 .containsEntry("count", 42L)
+                .containsEntry("count_delta", 42L)
+                .containsEntry("test", "foobar");
+
+        final GelfMessage secondMsg = allValues.get(1);
+        assertThat(secondMsg.getMessage()).isEqualTo("name=prefix.foo.bar type=COUNTER");
+        assertThat(secondMsg.getLevel()).isEqualTo(GelfMessageLevel.DEBUG);
+        assertThat(secondMsg.getHost()).isEqualTo("source");
+        assertThat(secondMsg.getAdditionalFields())
+                .hasSize(5)
+                .containsEntry("name", "prefix.foo.bar")
+                .containsEntry("type", "COUNTER")
+                .containsEntry("count", 52L)
+                .containsEntry("count_delta", 10L)
                 .containsEntry("test", "foobar");
     }
 
@@ -109,10 +122,11 @@ public class GelfReporterTest {
         assertThat(gelfMessage.getLevel()).isEqualTo(GelfMessageLevel.DEBUG);
         assertThat(gelfMessage.getHost()).isEqualTo("source");
         assertThat(gelfMessage.getAdditionalFields())
-                .hasSize(14)
+                .hasSize(15)
                 .containsEntry("name", "prefix.foo.bar")
                 .containsEntry("type", "HISTOGRAM")
                 .containsEntry("count", 2L)
+                .containsEntry("count_delta", 2L)
                 .containsEntry("max", 40L)
                 .containsEntry("min", 20L)
                 .containsEntry("mean", 30.0)
@@ -133,10 +147,11 @@ public class GelfReporterTest {
         assertThat(gelfMessage.getLevel()).isEqualTo(GelfMessageLevel.DEBUG);
         assertThat(gelfMessage.getHost()).isEqualTo("source");
         assertThat(gelfMessage.getAdditionalFields())
-                .hasSize(9)
+                .hasSize(10)
                 .containsEntry("name", "prefix.foo.bar")
                 .containsEntry("type", "METER")
                 .containsEntry("count", 30L)
+                .containsEntry("count_delta", 30L)
                 .containsEntry("test", "foobar");
     }
 
@@ -154,10 +169,11 @@ public class GelfReporterTest {
         assertThat(gelfMessage.getLevel()).isEqualTo(GelfMessageLevel.DEBUG);
         assertThat(gelfMessage.getHost()).isEqualTo("source");
         assertThat(gelfMessage.getAdditionalFields())
-                .hasSize(20)
+                .hasSize(21)
                 .containsEntry("name", "prefix.foo.bar")
                 .containsEntry("type", "TIMER")
                 .containsEntry("count", 2L)
+                .containsEntry("count_delta", 2L)
                 .containsEntry("min", 5.0)
                 .containsEntry("max", 10.0)
                 .containsEntry("mean", 7.5)

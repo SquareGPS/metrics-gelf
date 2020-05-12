@@ -1,12 +1,12 @@
 /**
  * Copyright © 2016 Graylog, Inc. (hello@graylog.com)
- *
+ * <p>
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,16 +15,7 @@
  */
 package org.graylog.metrics;
 
-import com.codahale.metrics.Clock;
-import com.codahale.metrics.Counter;
-import com.codahale.metrics.Gauge;
-import com.codahale.metrics.Histogram;
-import com.codahale.metrics.Meter;
-import com.codahale.metrics.MetricFilter;
-import com.codahale.metrics.MetricRegistry;
-import com.codahale.metrics.ScheduledReporter;
-import com.codahale.metrics.Snapshot;
-import com.codahale.metrics.Timer;
+import com.codahale.metrics.*;
 import org.graylog2.gelfclient.GelfConfiguration;
 import org.graylog2.gelfclient.GelfMessageBuilder;
 import org.graylog2.gelfclient.GelfMessageLevel;
@@ -79,6 +70,7 @@ public class GelfReporter extends ScheduledReporter {
         private int maxInFlightSends;
         private GelfMessageLevel level;
         private String source;
+        private boolean sendCountDelta;
 
         private Map<String, Object> additionalFields;
         private GelfTransports transport;
@@ -104,6 +96,7 @@ public class GelfReporter extends ScheduledReporter {
             this.maxInFlightSends = 512;
             this.level = GelfMessageLevel.INFO;
             this.source = "metrics";
+            this.sendCountDelta = true;
         }
 
         /**
@@ -329,6 +322,11 @@ public class GelfReporter extends ScheduledReporter {
             return this;
         }
 
+        public Builder sendCountDelta(boolean countsDelta) {
+            this.sendCountDelta = countsDelta;
+            return this;
+        }
+
         /**
          * Builds a {@link GelfReporter} with the given properties.
          *
@@ -365,7 +363,7 @@ public class GelfReporter extends ScheduledReporter {
                     filter,
                     level,
                     source,
-                    additionalFields);
+                    additionalFields, sendCountDelta);
         }
     }
 
@@ -377,13 +375,16 @@ public class GelfReporter extends ScheduledReporter {
     private final GelfMessageLevel level;
     private final String source;
     private final Map<String, Object> additionalFields;
+    private final boolean sendCountDelta;
+    private final Map<String, Long> lastCountValues = new HashMap<>();
 
     /**
      * {@inheritDoc}
      */
     GelfReporter(MetricRegistry registry, GelfTransport gelfTransport,
                  Clock clock, String prefix, TimeUnit rateUnit, TimeUnit durationUnit,
-                 MetricFilter filter, GelfMessageLevel level, String source, Map<String, Object> additionalFields) {
+                 MetricFilter filter, GelfMessageLevel level, String source, Map<String, Object> additionalFields,
+                 boolean sendCountDelta) {
         super(registry, "gelf-reporter", filter, rateUnit, durationUnit);
         this.gelfTransport = requireNonNull(gelfTransport);
         this.clock = clock;
@@ -391,6 +392,7 @@ public class GelfReporter extends ScheduledReporter {
         this.level = level;
         this.source = source;
         this.additionalFields = additionalFields == null ? Collections.<String, Object>emptyMap() : new HashMap<>(additionalFields);
+        this.sendCountDelta = sendCountDelta;
     }
 
     /**
@@ -448,15 +450,28 @@ public class GelfReporter extends ScheduledReporter {
         }
     }
 
+
+    private void addCountAndSend(GelfMessageBuilder b, String nameWithType, Counting counting) {
+        long currentCount = counting.getCount();
+        b.additionalField("count", currentCount);
+        if (sendCountDelta) {
+            long lastCount = lastCountValues.getOrDefault(nameWithType, 0L);
+            b.additionalField("count_delta", currentCount - lastCount);
+        }
+        if (gelfTransport.trySend(b.build()) && sendCountDelta) {
+            lastCountValues.put(nameWithType, currentCount);
+        }
+    }
+
     private void sendTimer(long timestamp, String name, Timer timer) {
         final Snapshot snapshot = timer.getSnapshot();
-        final GelfMessageBuilder message = new GelfMessageBuilder("name=" + name + " type=TIMER", source)
+        String nameWithType = "name=" + name + " type=TIMER";
+        final GelfMessageBuilder message = new GelfMessageBuilder(nameWithType, source)
                 .timestamp(timestamp)
                 .level(level)
                 .additionalFields(additionalFields)
                 .additionalField("name", name)
                 .additionalField("type", "TIMER")
-                .additionalField("count", timer.getCount())
                 .additionalField("min", convertDuration(snapshot.getMin()))
                 .additionalField("max", convertDuration(snapshot.getMax()))
                 .additionalField("mean", convertDuration(snapshot.getMean()))
@@ -474,35 +489,35 @@ public class GelfReporter extends ScheduledReporter {
                 .additionalField("m15", convertRate(timer.getFifteenMinuteRate()))
                 .additionalField("rate_unit", getRateUnit());
 
-        gelfTransport.trySend(message.build());
+        addCountAndSend(message, nameWithType, timer);
     }
 
     private void sendMeter(long timestamp, String name, Meter meter) {
-        final GelfMessageBuilder message = new GelfMessageBuilder("name=" + name + " type=METER", source)
+        String nameWithType = "name=" + name + " type=METER";
+        final GelfMessageBuilder message = new GelfMessageBuilder(nameWithType, source)
                 .timestamp(timestamp)
                 .level(level)
                 .additionalFields(additionalFields)
                 .additionalField("name", name)
                 .additionalField("type", "METER")
-                .additionalField("count", meter.getCount())
                 .additionalField("mean_rate", convertRate(meter.getMeanRate()))
                 .additionalField("m1", convertRate(meter.getOneMinuteRate()))
                 .additionalField("m5", convertRate(meter.getFiveMinuteRate()))
                 .additionalField("m15", convertRate(meter.getFifteenMinuteRate()))
                 .additionalField("rate_unit", getRateUnit());
 
-        gelfTransport.trySend(message.build());
+        addCountAndSend(message, nameWithType, meter);
     }
 
     private void sendHistogram(long timestamp, String name, Histogram histogram) {
         final Snapshot snapshot = histogram.getSnapshot();
-        final GelfMessageBuilder message = new GelfMessageBuilder("name=" + name + " type=HISTOGRAM", source)
+        String nameWithType = "name=" + name + " type=HISTOGRAM";
+        final GelfMessageBuilder message = new GelfMessageBuilder(nameWithType, source)
                 .timestamp(timestamp)
                 .level(level)
                 .additionalFields(additionalFields)
                 .additionalField("name", name)
                 .additionalField("type", "HISTOGRAM")
-                .additionalField("count", histogram.getCount())
                 .additionalField("min", snapshot.getMin())
                 .additionalField("max", snapshot.getMax())
                 .additionalField("mean", snapshot.getMean())
@@ -514,19 +529,19 @@ public class GelfReporter extends ScheduledReporter {
                 .additionalField("p99", snapshot.get99thPercentile())
                 .additionalField("p999", snapshot.get999thPercentile());
 
-        gelfTransport.trySend(message.build());
+        addCountAndSend(message, nameWithType, histogram);
     }
 
     private void sendCounter(long timestamp, String name, Counter counter) {
-        final GelfMessageBuilder message = new GelfMessageBuilder("name=" + name + " type=COUNTER", source)
+        String nameWithType = "name=" + name + " type=COUNTER";
+        final GelfMessageBuilder message = new GelfMessageBuilder(nameWithType, source)
                 .timestamp(timestamp)
                 .level(level)
                 .additionalFields(additionalFields)
                 .additionalField("name", name)
-                .additionalField("type", "COUNTER")
-                .additionalField("count", counter.getCount());
+                .additionalField("type", "COUNTER");
 
-        gelfTransport.trySend(message.build());
+        addCountAndSend(message, nameWithType, counter);
     }
 
     private void sendGauge(long timestamp, String name, Gauge gauge) {
